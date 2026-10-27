@@ -12,7 +12,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')
   let browser;
   const errors = [];
   try {
-    browser = await chromium.launch({headless:true, executablePath:process.env.CHROMIUM_PATH || undefined, args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']});
+    browser = await chromium.launch({headless:true, executablePath:process.env.CHROMIUM_PATH || undefined, args:['--no-sandbox','--disable-dev-shm-usage','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
     const page = await browser.newPage({viewport:{width:1440,height:900}});
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -27,6 +27,17 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')
     await page.waitForTimeout(150);
     assert.equal(await page.evaluate(()=>Game.phase),'play');
     assert.equal(await page.evaluate(()=>Game.players.length),22);
+    const graphics=await page.evaluate(()=>{
+      Game.paused=true;Renderer.draw();const gl=Renderer.engine.getContext();
+      const nearA=Renderer.point(50,54),nearB=Renderer.point(51,54),farA=Renderer.point(50,10),farB=Renderer.point(51,10);
+      const perspective=Math.hypot(nearA.x-nearB.x,nearA.y-nearB.y)>Math.hypot(farA.x-farB.x,farA.y-farB.y)*1.1;
+      const oldZ=Game.ball.z;Game.ball.z=8;Renderer.draw();const ballHeight=Renderer.ballMesh.position.y;Game.ball.z=oldZ;
+      const views=['Broadcast','High angle','Behind goal'].map(mode=>{settings.camera=mode;Renderer.draw();return Renderer.camera.position.toArray()});settings.camera='Broadcast';Renderer.draw();
+      const p=Game.players[0],pose=p.anim;p.anim=1;p.vx=5;Renderer.draw();const animated=Renderer.models[0].legs[0].rotation.x!==0;p.anim=pose;p.vx=0;
+      return {revision:THREE.REVISION,webgl:(Renderer.engine instanceof THREE.WebGLRenderer),perspectiveCamera:Renderer.camera.isPerspectiveCamera,models:Renderer.models.length,perspective,ballHeight,animated,distinctViews:new Set(views.map(a=>a.join(','))).size,error:gl.getError(),calls:Renderer.engine.info.render.calls};
+    });
+    assert.equal(graphics.revision,'128');assert.equal(graphics.webgl,true);assert.equal(graphics.perspectiveCamera,true);assert.equal(graphics.models,22);assert.equal(graphics.perspective,true);assert.equal(graphics.ballHeight,8.25);assert.equal(graphics.animated,true);assert.equal(graphics.distinctViews,3);assert.equal(graphics.error,0);assert(graphics.calls<550);
+
     const flow = await page.evaluate(() => {
       Game.paused=true;
       const initial=Game.time;
@@ -91,7 +102,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')
     assert.deepEqual(league,{done:true,played:true,results:28});
     const editor=await page.evaluate(()=>{UI.show('editor');$('clubName').value='Test Athletic';$('leagueName').value='Test Premier';UI.saveClub();return {club:WorldDatabase.club(0).name,league:WorldDatabase.leagues[0].name,saved:SaveManager.read('editor',{})['c0'].name}});
     assert.deepEqual(editor,{club:'Test Athletic',league:'Test Premier',saved:'Test Athletic'});
-    const filePage=await browser.newPage();filePage.on('pageerror',e=>errors.push(e.message));await filePage.goto('file://'+path.join(__dirname,'..','index.html'));assert.match(await filePage.title(),/Top Corner/);await filePage.close();
+    const filePage=await browser.newPage();filePage.on('pageerror',e=>errors.push(e.message));await filePage.goto('file://'+path.join(__dirname,'..','index.html'));assert.match(await filePage.title(),/Top Corner/);assert.equal(await filePage.evaluate(()=>{SaveManager.write('tutorial',true);Game.start(0,200);Game.paused=true;Renderer.draw();return Renderer.ready&&(Renderer.engine instanceof THREE.WebGLRenderer)}),true);await filePage.close();
     const mobile = await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});mobile.on('pageerror',e=>errors.push(e.message));await mobile.goto(`http://127.0.0.1:${server.address().port}`);
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     await mobile.evaluate(()=>{SaveManager.write('tutorial',true);Game.start(0,200);Game.paused=true;Renderer.draw()});
@@ -99,6 +110,6 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')
     assert.equal(await mobile.locator('.touch-actions').isVisible(),true);
     if(process.env.SCREENSHOT_DIR){await page.evaluate(()=>UI.show('home'));await page.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'home-final.png')});await mobile.screenshot({path:path.join(process.env.SCREENSHOT_DIR,'mobile-final.png')});}
     assert.deepEqual(errors,[]);
-    console.log('PASS: world, UI kickoff, 1800 simulation ticks, goal, restarts, offside, halftime, substitutions, full career season, promotion/relegation, save validation, transfers, cup, league, editor, file:// launch and mobile layout.');
+    console.log('PASS: embedded WebGL 3D, perspective, 22 articulated models, ball height, three cameras, GPU error check, world, UI kickoff, 1800 simulation ticks, goal, restarts, offside, halftime, substitutions, full career season, promotion/relegation, save validation, transfers, cup, league, editor, file:// launch and mobile layout.');
   } finally {await browser?.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(e=>{console.error(e);process.exitCode=1});
